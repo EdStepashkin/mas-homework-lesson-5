@@ -100,3 +100,8 @@ def read_local_file(filepath: str) -> str:
         return f"Помилка: Файл не знайдено за шляхом {filepath}"
     except Exception as e:
         return f"Помилка читання файлу: {str(e)}"
+
+#  todo
+def knowledge_search(query: str) -> str:
+    """Search the local knowledge base using hybrid retrieval + reranking."""
+    pass

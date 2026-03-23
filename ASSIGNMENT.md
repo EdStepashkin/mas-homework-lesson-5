@@ -1,157 +1,106 @@
-# Завдання: Research Agent
+# Завдання: Research Agent з RAG-системою
 
-Побудуйте агента, який отримує питання від користувача, самостійно шукає інформацію через набір інструментів, збирає знахідки, і генерує структурований Markdown-звіт.
-
-> **Примітка:** Проєкт містить приклад коду, який є відправною точкою. Ви можете вільно змінювати, доповнювати та адаптувати його під свої потреби.
-
-**Приклад взаємодії:**
-```
-User: "Порівняй три підходи до побудови RAG: naive, sentence-window та parent-child retrieval"
-
-Agent:
-  Thought: Потрібно знайти інформацію про кожен підхід окремо
-  → web_search("naive RAG pipeline approach")
-  → web_search("sentence window retrieval RAG")
-  → web_search("parent child retrieval RAG")
-  → read_url("https://...стаття з порівнянням підходів...")
-  → web_search("RAG approaches comparison tradeoffs 2024")
-
-Final Answer: [структурований Markdown-звіт з порівнянням трьох підходів]
-
-Output: → research_report.md
-```
+Розширте свого Research Agent з `homework-lesson-3` — додайте **RAG-інструмент** з гібридним пошуком та reranking, щоб агент міг шукати не лише в інтернеті, а й у локальній базі знань.
 
 ---
 
-### Секрети та змінні середовища
+### Що змінюється порівняно з попередніми homework
 
-**НІКОЛИ не комітьте API-ключі в репозиторій!**
-
-- Зберігайте всі секрети (API-ключі, токени) у файлі `.env`
-- Файл `.env` вже додано до `.gitignore` — він не потрапить у git
-- Для налаштування конфігурації використовується Pydantic Settings (`config.py`), який автоматично читає змінні з `.env` файлу
-- Шаблон змінних середовища — у файлі `.env.example`
+| Було (homework-lesson-3)                        | Стає (homework-lesson-5) |
+|-------------------------------------------------|---|
+| Tools: `web_search`, `read_url`, `write_report` | + новий tool: `knowledge_search` |
+| Агент шукає лише в інтернеті                    | Агент шукає і в інтернеті, і в локальній базі знань |
+|                                                 | Є pipeline для завантаження документів у векторну БД |
+|                                                 | Hybrid search (semantic + BM25) з cross-encoder reranking |
 
 ---
 
 ### Що потрібно реалізувати
 
-#### 1. Інструменти агента (Tools)
+#### 1. Knowledge Ingestion Pipeline (`ingest.py`)
 
-Визначте та реалізуйте мінімум **3 інструменти** з tool calling:
+Скрипт, який завантажує документи у векторну базу даних:
 
-##### `web_search(query: str) -> list[dict]`
+- **Завантаження документів** — PDF файли з директорії `./data/`
+- **Chunking** — розбиття на чанки з `RecursiveCharacterTextSplitter` (або semantic chunking — за бажанням)
+- **Embeddings** — використайте `text-embedding-3-small` або `text-embedding-3-large`
+- **Векторна БД** — оберіть одну з: FAISS (для простоти), Qdrant, Chroma, або pgvector
+- **Збереження індексу** — індекс повинен зберігатися на диск і перезавантажуватися без повторного embedding
 
-Пошук в інтернеті. Використайте бібліотеку [`ddgs`](https://pypi.org/project/ddgs/). Вона безкоштовна і не потребує API-ключа.
+Скрипт запускається окремо: `python ingest.py` — і створює/оновлює індекс.
 
-Що повертає DuckDuckGo: **список результатів**, де кожен містить `title` (заголовок сторінки), `href` (URL) та `body` (сніпет — 1-2 речення зі сторінки). Це **не повний текст** сторінки, а лише короткий фрагмент, як на сторінці результатів Google. Цього достатньо, щоб агент зрозумів, які сторінки релевантні, але недостатньо для глибокого аналізу — для цього є `read_url`.
+#### 2. Hybrid Retrieval з Reranking (`retriever.py`)
 
-Приклад того, що повертає DuckDuckGo:
+Модуль, що реалізує пошук по базі знань:
+
+- **Semantic search** — пошук за cosine similarity у векторній БД
+- **BM25 search** — лексичний пошук за ключовими словами
+- **Ensemble** — об'єднання результатів semantic + BM25 (наприклад, через `EnsembleRetriever` або вручну)
+- **Reranking** — cross-encoder reranker (наприклад, `BAAI/bge-reranker-base`) для фільтрації шуму
+
+#### 3. RAG Tool для агента (`tools.py`)
+
+Новий tool `knowledge_search`, який агент використовує поряд з `web_search`, `read_url`, `write_report`:
+
 ```python
-from ddgs import DDGS
-
-results = DDGS().text("LangChain vs LlamaIndex RAG", max_results=5)
-# [
-#   {
-#     "title": "LangChain vs LlamaIndex: A Detailed Comparison",
-#     "href": "https://example.com/article",
-#     "body": "LangChain focuses on composable chains while LlamaIndex specializes in..."
-#   },
-#   ...
-# ]
+def knowledge_search(query: str) -> str:
+    """Search the local knowledge base. Use for questions about ingested documents."""
+    ...
 ```
 
-**Що очікується від вашої реалізації:**
-- Обгортка над `DDGS().text()`, яка оформлена як tool із JSON Schema (description, parameters)
-- Параметр `max_results` можна зафіксувати (наприклад, 5) або зробити параметром tool
-- Повертайте результати у форматі, зручному для LLM — наприклад, список із `title`, `url`, `snippet`
+Агент сам вирішує, коли шукати в інтернеті (`web_search`), а коли — в локальній базі (`knowledge_search`).
 
-##### `read_url(url: str) -> str`
+#### 4. Тестові дані (`data/`)
 
-Отримання **повного тексту** зі сторінки за URL. Це потрібно, тому що `web_search` повертає лише сніпети — коротенькі фрагменти. Коли агент знаходить через пошук релевантну сторінку, він може прочитати її повністю через `read_url`, щоб отримати деталі.
-
-Рекомендовані бібліотеки (на вибір):
-- [`trafilatura`](https://pypi.org/project/trafilatura/) — витягує основний текст зі сторінки, ігноруючи меню, рекламу, футери
-- `httpx` + `readability-lxml` — більш ручний підхід, але теж працює
-- Простий `httpx.get()` + `BeautifulSoup` — мінімальний варіант
-
-Приклад із `trafilatura`:
-```python
-import trafilatura
-
-downloaded = trafilatura.fetch_url("https://example.com/article")
-text = trafilatura.extract(downloaded)
-# "LangChain is a framework for building LLM-powered applications..."
-# (повний текст статті, без HTML, меню, реклами)
-```
-
-**Що очікується від вашої реалізації:**
-- Tool, що приймає URL і повертає текст сторінки
-- **Обрізання результату** — повний текст сторінки може бути 20 000+ символів, що забʼє контекстне вікно. Обріжте до розумного ліміту (наприклад, перші 5 000-10 000 символів). Це і є context engineering на практиці
-- Обробка помилок: невалідний URL, таймаут, сторінка недоступна — повертайте зрозуміле повідомлення про помилку, а не crash
-
-##### `write_report(filename: str, content: str) -> str`
-
-Зберігає фінальний Markdown-звіт у файл.
-
-**Що очікується від вашої реалізації:**
-- Приймає назву файлу та текст звіту (Markdown)
-- Зберігає у файл у директорію `output/` (або іншу, за вашим вибором)
-- Повертає підтвердження з повним шляхом до файлу
-
-Це найпростіший tool — по суті обгортка над `open(path, 'w').write(content)`. Але він потрібен, щоб агент міг **сам** зберегти результат, а не покладатися на зовнішній код.
-
-##### Додаткові tools (необовʼязково)
-
-Ви можете додати інші інструменти, якщо вважаєте корисним — наприклад, `calculate`, `read_file`, `list_files`. Додаткові tools не обовʼязкові, але можуть підвищити оцінку, якщо вони осмислені та інтегровані в agent loop.
-
-#### 2. Agent Loop
-
-Реалізуйте агента за допомогою **LangChain**.
-
-Використайте `create_react_agent` (або `create_agent`) з `@tool` декоратором для визначення інструментів. LangChain сам реалізує ReAct-цикл — вам потрібно правильно описати tools, налаштувати агента та підключити модель.
-
-Модель — будь-яка на ваш вибір: `ChatOpenAI`, `ChatAnthropic`, `ChatGoogleGenerativeAI` тощо. LangChain дозволяє змінити провайдера одним рядком — скористайтесь цим.
-
-**Вимоги до агента:**
-- Агент запускається з терміналу (`python main.py`) та працює в інтерактивному режимі — користувач вводить запитання, отримує відповідь, і може продовжити діалог
-- Агент **підтримує зв'язний діалог** — пам'ятає попередні повідомлення в межах сесії. Наприклад, якщо користувач спочатку попросив дослідити тему, а потім каже "а тепер порівняй це з X", агент розуміє контекст. Використайте `MemorySaver` (checkpointer) або аналогічний механізм
-- Агент **сам вирішує**, які tools викликати та в якій послідовності — ви не хардкодите порядок
-- Підтримка **multi-step**: мінімум 3-5 tool calls на один запит
-- **Ліміт кроків** (max_iterations) — щоб агент не зациклився
-- **Обробка помилок**: якщо tool повертає помилку — агент отримує її в контекст і реагує (повторює з іншими параметрами або продовжує без цього результату)
-
-#### 3. Context Engineering
-
-Реалізуйте **обрізання tool results** — якщо результат `web_search` або `read_url` завеликий, обрізайте до N символів перед поверненням у контекст. Наприклад, повний текст сторінки з `read_url` може бути 20 000+ символів — поверніть лише перші 5 000-10 000.
-
-#### 4. Промпти та конфігурація
-
-- System prompt та всі шаблони промптів мають бути **винесені в окремий файл** (`config.py` або `prompts.py`), а не захардкоджені в логіці агента
-- System prompt має чітко описувати роль агента, доступні інструменти, та стратегію дослідження
-
-#### 5. Середовище та документація
-
-- **Залежності**: проєкт повинен містити файл залежностей — `requirements.txt`, `pyproject.toml`, `Pipfile`, або аналог — щоб можна було відтворити середовище однією командою (наприклад, `pip install -r requirements.txt`). Вказуйте конкретні версії бібліотек
-- **Мінімальні версії бібліотек:**
-  - `langchain >= 1.2.0` — https://pypi.org/project/langchain/
-  - `ddgs >= 7.0` — https://pypi.org/project/ddgs/
-  - `trafilatura >= 2.0.0` — https://pypi.org/project/trafilatura/
-- **README.md**: як запустити, які залежності встановити, який API-ключ потрібен, короткий опис архітектури
-- **Приклад роботи**: збережіть у `example_output/` один згенерований звіт, щоб було видно результат
+У `./data/` вже є декілька документів для тестування. За бажанням, додайте ще для перевірки роботи системи з різними типами.
 
 ---
 
-### Структура проєкту
+### Структура проекту
 
 ```
-research-agent/
-├── main.py              # Entry point — interactive REPL loop
-├── agent.py             # Agent setup (LLM, tools, memory, create_react_agent)
-├── tools.py             # Tool definitions and implementations
-├── config.py            # System prompt, settings, constants
-├── requirements.txt
-├── example_output/
-│   └── report.md        # Example generated report
-└── README.md            # Setup instructions, architecture overview
+homework-lesson-5/
+├── main.py              # Entry point (з homework-lesson-3/4, адаптований)
+├── agent.py             # Agent setup з новим knowledge_search tool
+├── tools.py             # web_search, read_url, write_report, knowledge_search
+├── retriever.py         # Hybrid retrieval + reranking logic
+├── ingest.py            # Ingestion pipeline: docs → chunks → embeddings → vector DB
+├── config.py            # Settings
+├── requirements.txt     # Залежності
+├── data/                # Документи для ingestion
+│   └── (ваші PDF/TXT файли)
+└── .env                 # API ключі (не комітити!)
+```
+
+---
+
+### Очікуваний результат
+
+1. **Ingestion працює** — `python ingest.py` завантажує документи з `./data/` та створює індекс
+2. **Hybrid search** — пошук використовує і semantic, і BM25, результати об'єднуються
+3. **Reranking** — cross-encoder фільтрує нерелевантні результати
+4. **Агент використовує RAG** — агент самостійно вирішує, коли шукати в базі знань, а коли в інтернеті
+5. **Multi-step reasoning** — агент комбінує результати з різних джерел (web + knowledge base)
+6. **Звіт** — агент генерує Markdown-звіт з посиланнями на джерела
+
+Приклад логу в консолі:
+```
+You: Що таке RAG і які є підходи до retrieval?
+
+🔧 Tool call: knowledge_search(query="RAG retrieval approaches")
+📎 Result: [3 documents found]
+   - [Page 2] Retrieval-augmented generation combines...
+   - [Page 5] Hybrid search approaches include...
+   - [Page 3] Dense retrieval using bi-encoders...
+
+🔧 Tool call: web_search(query="RAG retrieval techniques 2026")
+📎 Result: Found 5 results...
+
+🔧 Tool call: read_url(url="https://example.com/advanced-rag")
+📎 Result: [5000 chars] Latest RAG techniques...
+
+🔧 Tool call: write_report(filename="rag_approaches.md", content="# RAG Approaches...")
+📎 Result: Report saved to output/rag_approaches.md
+
+Agent: RAG — це техніка, де...
 ```
