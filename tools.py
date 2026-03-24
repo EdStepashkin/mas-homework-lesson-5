@@ -101,15 +101,24 @@ def read_local_file(filepath: str) -> str:
     except Exception as e:
         return f"Помилка читання файлу: {str(e)}"
 
+# Глобальний кеш для рітрівера, щоб не завантажувати модель та базу щоразу
+_GLOBAL_RETRIEVER = None
+
+def _get_cached_retriever():
+    global _GLOBAL_RETRIEVER
+    if _GLOBAL_RETRIEVER is None:
+        from retriever import get_retriever
+        _GLOBAL_RETRIEVER = get_retriever()
+    return _GLOBAL_RETRIEVER
+
 @tool
 def knowledge_search(query: str) -> str:
     """
     Search the local knowledge base. Use for questions about ingested documents.
     """
     try:
-        from retriever import get_retriever
+        retriever = _get_cached_retriever()
         
-        retriever = get_retriever()
         # Retrieve documents
         docs = retriever.invoke(query)
         
