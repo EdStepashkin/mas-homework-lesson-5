@@ -101,7 +101,33 @@ def read_local_file(filepath: str) -> str:
     except Exception as e:
         return f"Помилка читання файлу: {str(e)}"
 
-#  todo
+@tool
 def knowledge_search(query: str) -> str:
-    """Search the local knowledge base using hybrid retrieval + reranking."""
-    pass
+    """
+    Search the local knowledge base. Use for questions about ingested documents.
+    """
+    try:
+        from retriever import get_retriever
+        
+        retriever = get_retriever()
+        # Retrieve documents
+        docs = retriever.invoke(query)
+        
+        if not docs:
+            return "Не знайдено релевантної інформації у базі знань."
+            
+        result = f"[{len(docs)} documents found]\n"
+        for i, doc in enumerate(docs):
+            source = doc.metadata.get('source', 'Unknown')
+            page = doc.metadata.get('page', 'Unknown')
+            # Extract filename from path if possible
+            filename = os.path.basename(source) if '/' in source or '\\' in source else source
+            result += f"- [Page {page} of {filename}] {doc.page_content}\n\n"
+            
+        # Context Engineering
+        if len(result) > settings.max_url_content_length:
+            return result[:settings.max_url_content_length] + "\n... [ТЕКСТ ОБРІЗАНО ЧЕРЕЗ ЛІМІТ]"
+            
+        return result
+    except Exception as e:
+        return f"Помилка пошуку в базі знань: {str(e)}"

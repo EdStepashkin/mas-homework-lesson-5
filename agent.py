@@ -3,7 +3,7 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
 from config import settings, SYSTEM_PROMPT
-from tools import web_search, read_url, write_report, get_current_time, read_local_file
+from tools import web_search, read_url, write_report, get_current_time, read_local_file, knowledge_search
 
 # 1. Ініціалізуємо LLM (наш "мозок")
 llm = ChatGoogleGenerativeAI(
@@ -13,7 +13,7 @@ llm = ChatGoogleGenerativeAI(
 )
 
 # 2. Збираємо інструменти в список (наші "руки")
-tools = [web_search, read_url, write_report, get_current_time, read_local_file]
+tools = [web_search, read_url, write_report, get_current_time, read_local_file, knowledge_search]
 
 # 3. Ініціалізуємо пам'ять сесії
 memory = MemorySaver()
